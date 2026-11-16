@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.ensemble import HistGradientBoostingClassifier
+from xgboost import XGBClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import make_pipeline
@@ -181,11 +182,13 @@ def make_model(name, seed=42):
     """The two candidate models. Logistic regression needs standardised features; gradient boosting does not."""
     if name == "logreg":
         return make_pipeline(StandardScaler(), LogisticRegression(C=0.1, max_iter=2000))
+    if name == "xgb":
+        return XGBClassifier(n_estimators=200, learning_rate=0.05, max_depth=4, objective="multi:softprob", num_class = 6, random_state=seed,n_jobs=-1)
     return HistGradientBoostingClassifier(learning_rate=0.05, max_iter=300, max_leaf_nodes=31,
                                           l2_regularization=1.0, random_state=seed)
 
 
-MODEL_NAMES = ["logreg", "hgb"]
+MODEL_NAMES = ["logreg", "hgb", "xgb"]
 
 
 def fit(name, X, Y, seed=42):
@@ -213,11 +216,14 @@ def cross_validate(X, Y, groups, num_votes, n_folds, seed):
         for name in MODEL_NAMES:
             oof[name][va] = fit(name, X[tr], Y[tr], seed).predict_proba(X[va])
         print(f"fold {fold}: " + ", ".join(f"{n}={kl_score(Y[va], oof[n][va]):.4f}" for n in MODEL_NAMES))
+    ensemble = 0.5 * oof["hgb"] + 0.5 * oof["xgb"]
+    oof["ensemble"] = ensemble
+    SCORE_NAMES = MODEL_NAMES +["ensemble"]
     print(f"\nCV KL (all EEGs)        prior={kl_score(Y, prior):.4f} " +
-          " ".join(f"{n}={kl_score(Y, oof[n]):.4f}" for n in MODEL_NAMES))
+          " ".join(f"{n}={kl_score(Y, oof[n]):.4f}" for n in SCORE_NAMES))
     print(f"CV KL (>=10 votes only) prior={kl_score(Y[hi], prior[hi]):.4f} " +
-          " ".join(f"{n}={kl_score(Y[hi], oof[n][hi]):.4f}" for n in MODEL_NAMES))
-    return min(MODEL_NAMES, key=lambda n: kl_score(Y, oof[n]))   # lower KL is better
+          " ".join(f"{n}={kl_score(Y[hi], oof[n][hi]):.4f}" for n in SCORE_NAMES))
+    return min(SCORE_NAMES, key=lambda n: kl_score(Y, oof[n]))   # lower KL is better
 
 
 # ----------------------------------------------------------------------------- main
@@ -255,14 +261,22 @@ def main():
     print("model for submission:", best)
 
     # 4. Refit on all training data and predict the test set
-    final = fit(best, X, Y, args.seed)
+    if best == "ensemble":
+        final_hgb = fit("hgb",X,Y,args.seed)
+        final_xgb = fit("xgb",X,Y,args.seed)
+    else:
+        final = fit(best, X, Y, args.seed)
     test = pd.read_csv(args.data_dir / "test.csv")
     T_df = build_features(test, args.data_dir / "test_spectrograms", is_test=True, n_jobs=args.n_jobs)
     T_df = test[["eeg_id"]].merge(T_df, on="eeg_id", how="left")   # keep the order of test.csv
 
     # Submission format: eeg_id plus one predicted probability per class (each row sums to 1).
     sub = pd.DataFrame({"eeg_id": T_df["eeg_id"]})
-    sub[CLASSES] = final.predict_proba(to_matrix(T_df, feats))
+    X_test = to_matrix(T_df, feats)
+    if best == "ensemble":
+        sub[CLASSES] = 0.5 * final_hgb.predict_proba(X_test)+0.5*final_xgb.predict_proba(X_test)
+    else:
+        sub[CLASSES] = final.predict_proba(X_test)
     sub.to_csv(args.output, index=False)
     print(f"Saved {args.output} with {len(sub)} rows")
 
