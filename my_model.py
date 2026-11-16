@@ -89,6 +89,7 @@ def window_features(spec, cols):
     """
     feats = {}
     short_part = spec[145:155,:] # we selecteren 20 seconden in het midden van de 10 minuten om kortdurige EEG-patronen te onderzoeken
+    before_part = spec[135:145,:] 
 
     total = {r: 0.0 for r in REGIONS}   # total power per region, for relative band power
     band_power = {}
@@ -97,6 +98,9 @@ def window_features(spec, cols):
         short_p = np.nanmean(short_part[:, idx], axis=1) #berekent gemiddeld vermogen maar enkel voor die 20 seconden
         short_lp = np.log1p(np.nan_to_num(short_p, nan=0.0).clip(min=0)) # omzetten naar log schaal
         feats[f"{r}_{b}_short_mean"] = short_lp.mean() # bewaart het gemiddelde als nieuw kenmerk => +16 kenmerken 
+        before_p = np.nanmean(before_part[:, idx], axis=1) #berekent gemiddeld vermogen maar enkel voor die 20 seconden
+        before_lp = np.log1p(np.nan_to_num(before_p, nan=0.0).clip(min=0)) # omzetten naar log schaal
+        feats[f"{r}_{b}_before_mean"] = before_lp.mean() # bewaart het gemiddelde als nieuw kenmerk => +16 kenmerken 
         lp = np.log1p(np.nan_to_num(p, nan=0.0).clip(min=0))     # log scale; missing values -> 0
         feats[f"{r}_{b}_mean"] = lp.mean()
         feats[f"{r}_{b}_std"] = lp.std()
